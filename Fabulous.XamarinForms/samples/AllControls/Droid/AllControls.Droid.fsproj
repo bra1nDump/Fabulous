@@ -17,8 +17,8 @@
     <AndroidManifest>Properties\AndroidManifest.xml</AndroidManifest>
     <MonoAndroidResourcePrefix>Resources</MonoAndroidResourcePrefix>
     <MonoAndroidAssetsPrefix>Assets</MonoAndroidAssetsPrefix>
-    <SelectedDevice>Google Pixel 2</SelectedDevice>
-    <DefaultDevice>Android_Accelerated_x86_Nougat</DefaultDevice>
+    <SelectedDevice>my_device</SelectedDevice>
+    <DefaultDevice>my_device</DefaultDevice>
     <Name>AllControls.Droid</Name>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
   </PropertyGroup>
@@ -46,7 +46,7 @@
     <GenerateTailCalls>true</GenerateTailCalls>
     <PlatformTarget>
     </PlatformTarget>
-<AndroidEnableMultiDex>true</AndroidEnableMultiDex>
+    <AndroidEnableMultiDex>true</AndroidEnableMultiDex>
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Properties\AssemblyInfo.fs" />
@@ -335,7 +335,7 @@
     <Reference Include="OxyPlot.Xamarin.Android">
       <HintPath>..\..\..\..\packages\androidapp\OxyPlot.Xamarin.Android\lib\MonoAndroid10\OxyPlot.Xamarin.Android.dll</HintPath>
     </Reference>
- <!--
+    <!--
     <Reference Include="FFImageLoading">
       <HintPath>..\..\..\..\packages\androidapp\Xamarin.FFImageLoading\lib\MonoAndroid10\FFImageLoading.dll</HintPath>
     </Reference>

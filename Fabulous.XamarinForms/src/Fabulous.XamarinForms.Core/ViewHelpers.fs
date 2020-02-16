@@ -107,15 +107,18 @@ module ViewHelpers =
         | Some viewElement -> viewElement
 
     let ContentsAttribKey = AttributeKey<(obj -> ViewElement)> "Stateful_Contents"
+    let ViewAttribKey = AttributeKey<(obj -> ViewElement)> "WithInternalModel_Contents"
 
     let localStateTable = System.Runtime.CompilerServices.ConditionalWeakTable<obj, obj option>()
 
+    /// boxed model
+    let mutable model: obj = null
+    let mutable mostRecentViewFunction: (obj -> ViewElement) voption = ValueNone
+    let mutable realViewPrev: ViewElement voption = ValueNone
+    let mutable item: obj = null
+
     type View with
 
-        /// Describes an element in the view which uses localized mutable state unrelated to the model
-        /// (and hence un-persisted), and can optionally access the underlying control. The 'init'
-        /// function is called only when the underlying control is created (and each time it is re-created,
-        /// if ever). The generated state object is associated with the underlying control.
         static member Stateful (init: (unit -> 'State), contents: 'State -> ViewElement, ?onCreate: ('State -> obj -> unit), ?onUpdate: ('State -> obj -> unit)) : _ when 'State : not struct =
 
             let attribs = AttributesBuilder(1)
@@ -132,10 +135,13 @@ module ViewHelpers =
 
             // The update method
             let update (prevOpt: ViewElement voption) (source: ViewElement) (target: obj) = 
-                let state = unbox<'State> ((snd (localStateTable.TryGetValue(target))).Value)
+                let state = unbox<'State> ((snd (localStateTable.TryGetValue(target))).Value) 
+
+                // function stored to create view from state!
                 let contents = source.TryGetAttributeKeyed(ContentsAttribKey).Value
                 let realSource = contents state
-                realSource.Update(prevOpt, source, target)
+
+                realSource.UpdateInherited(prevOpt, source, target)
                 match onUpdate with None -> () | Some f -> f state target
 
             // The element
@@ -144,11 +150,63 @@ module ViewHelpers =
         static member OnCreate (contents : ViewElement, onCreate: (obj -> unit)) =
             View.Stateful (init = (fun () -> ()), contents = (fun _ -> contents), onCreate = (fun _ obj -> onCreate obj))
 
+        // problems:
+        // 1. model is created every time the function is called (only need one copy per viewBackend - put into 
+        //    some table for state (already exists for Stateful)
+        // 2. when the `view` function is updated on the consumers side the new function is passed here
+        //    but it does not get stored in attributes, thus if the ViewElement was found in cache (internal to Fabulous)
+        //    then none of the create, update functions get updated on that entry, thus the new view function
+        //    is just thrown away. With the current implementation the ViewElement returned by `view` will only repond
+        //    to changes to the internal model (the rest will stay the same). `update` function - similar story, but 
+        //    just chanches are that update will not be changed over the lifecycle of the ViewElement. But that would be bad code
+        // 3. how to create the view generation attribute, considering the dispatch is internal..
         static member WithInternalModel(init: (unit -> 'InternalModel), 
                                         update: ('InternalMessage -> 'InternalModel -> 'InternalModel), 
                                         view : ('InternalModel -> ('InternalMessage -> unit) -> ViewElement)) =
-            let internalDispatch (state: 'InternalModel ref) msg = state.Value <- update msg state.Value
-            View.Stateful (init = (fun () -> ref (init ())), contents = (fun state -> view state.Value (internalDispatch state)))
+
+            
+
+            let rec updateProxyView (prev: ViewElement voption) (current: ViewElement) viewBackend =
+                // need proxy here (to keep track of problem 2.)
+                // this already has dispatch captured. Only needs model
+                //current.UpdatePrimitive(prev, viewBackend, (fun t -> ())
+                let view = current.TryGetAttributeKeyed(ViewAttribKey).Value
+                if mostRecentViewFunction.IsSome then
+                    let hasChanged = identical view mostRecentViewFunction.Value
+                    ()
+
+                // for the function to be accessible in update real view
+                mostRecentViewFunction <- ValueSome view
+
+                updateRealView ()
+            and updateRealView () =
+                // create ViewElement using most recently supplied view function to Proxy
+                // the value is varied based on most recent model as well
+                let newView = mostRecentViewFunction.Value (unbox model)
+                newView.UpdateIncremental(realViewPrev.Value, item)
+                realViewPrev <- ValueSome newView
+            and internalDispatch (msg: 'InternalMessage) =
+                let oldModel = unbox<'InternalModel> model
+                model <- box (update msg oldModel)
+
+                // need view here (but dont have Proxy view to get view: model -> ViewElement attribute)
+                // solution: since internalDispatch is only needed for upading parts of the view 
+                // that are dependent on the internal model, we can just use the last view function used
+                updateRealView()
+
+            let attribs = AttributesBuilder(1)
+            attribs.Add(ViewAttribKey, (fun stateObj -> view (unbox (stateObj)) internalDispatch))
+            
+            let create () =
+                let modelValue = init()
+                let realView = view modelValue internalDispatch
+                model <- box modelValue
+                item <- realView.Create()
+                realViewPrev <- ValueSome realView
+                item
+
+            ViewElement.Create(create, updateProxyView, attribs)
+            
 
     // Keep a table to make sure we create a unique ViewElement for each external object
     let externalsTable = System.Runtime.CompilerServices.ConditionalWeakTable<obj, obj>()
