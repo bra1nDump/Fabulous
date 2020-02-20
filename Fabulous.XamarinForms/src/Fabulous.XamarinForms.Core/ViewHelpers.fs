@@ -107,18 +107,12 @@ module ViewHelpers =
         | Some viewElement -> viewElement
 
     let ContentsAttribKey = AttributeKey<(obj -> ViewElement)> "Stateful_Contents"
-    let ViewAttribKey = AttributeKey<(obj -> ViewElement)> "WithInternalModel_Contents"
+    let ViewAttribKey = AttributeKey<(obj -> ViewElement)> "WithInternalModel_View"
 
+    /// this is not going to work for elements that will be in a collection view that reuses xamain views
     let localStateTable = System.Runtime.CompilerServices.ConditionalWeakTable<obj, obj option>()
 
-    /// boxed model
-    let mutable model: obj = null
-    let mutable mostRecentViewFunction: (obj -> ViewElement) voption = ValueNone
-    let mutable realViewPrev: ViewElement voption = ValueNone
-    let mutable item: obj = null
-
-    type View with
-
+    type View with 
         static member Stateful (init: (unit -> 'State), contents: 'State -> ViewElement, ?onCreate: ('State -> obj -> unit), ?onUpdate: ('State -> obj -> unit)) : _ when 'State : not struct =
 
             let attribs = AttributesBuilder(1)
@@ -150,60 +144,64 @@ module ViewHelpers =
         static member OnCreate (contents : ViewElement, onCreate: (obj -> unit)) =
             View.Stateful (init = (fun () -> ()), contents = (fun _ -> contents), onCreate = (fun _ obj -> onCreate obj))
 
-        // problems:
-        // 1. model is created every time the function is called (only need one copy per viewBackend - put into 
-        //    some table for state (already exists for Stateful)
-        // 2. when the `view` function is updated on the consumers side the new function is passed here
-        //    but it does not get stored in attributes, thus if the ViewElement was found in cache (internal to Fabulous)
-        //    then none of the create, update functions get updated on that entry, thus the new view function
-        //    is just thrown away. With the current implementation the ViewElement returned by `view` will only repond
-        //    to changes to the internal model (the rest will stay the same). `update` function - similar story, but 
-        //    just chanches are that update will not be changed over the lifecycle of the ViewElement. But that would be bad code
-        // 3. how to create the view generation attribute, considering the dispatch is internal..
-        static member WithInternalModel(init: (unit -> 'InternalModel), 
+    type LocalProgram =
+        {
+            LastModel: obj
+            LastViewInfo: ViewElement
+        }
+    let localProgramTable = System.Collections.Generic.Dictionary<int, LocalProgram>()
+    
+    type LocalProgramContext =
+        {
+            CreateViewInfo: obj -> ViewElement
+            View: obj
+        }
+    let localProgramContextTable = System.Collections.Generic.Dictionary<int, LocalProgramContext>()
+
+    type View with
+        
+        // Ideas: use ref to get the reference to the view implementation
+        static member WithInternalModel(key: int,
+                                        init: (unit -> 'InternalModel), 
                                         update: ('InternalMessage -> 'InternalModel -> 'InternalModel), 
                                         view : ('InternalModel -> ('InternalMessage -> unit) -> ViewElement)) =
+            let rec updateProxyView (prev: ViewElement voption) (current: ViewElement) target =
+                let newViewFunction = current.GetAttributeKeyed(ViewAttribKey)
+                match prev |> ValueOption.bind (fun prev -> prev.TryGetAttributeKeyed(ViewAttribKey)) with 
+                | ValueSome oldViewFunction 
+                    when identical oldViewFunction newViewFunction -> ()
+                | _ -> 
+                    let view boxedModel = view (unbox<'InternalModel> boxedModel) internalDispatch
+                    localProgramContextTable.[key] <- { CreateViewInfo = view; View = target }
+                    updateView()
+            and updateView () =
+                let programState = localProgramTable.[key]
+                let { CreateViewInfo = createViewInfo; View = view } = localProgramContextTable.[key]
 
-            
-
-            let rec updateProxyView (prev: ViewElement voption) (current: ViewElement) viewBackend =
-                // need proxy here (to keep track of problem 2.)
-                // this already has dispatch captured. Only needs model
-                //current.UpdatePrimitive(prev, viewBackend, (fun t -> ())
-                let view = current.TryGetAttributeKeyed(ViewAttribKey).Value
-                if mostRecentViewFunction.IsSome then
-                    let hasChanged = identical view mostRecentViewFunction.Value
-                    ()
-
-                // for the function to be accessible in update real view
-                mostRecentViewFunction <- ValueSome view
-
-                updateRealView ()
-            and updateRealView () =
-                // create ViewElement using most recently supplied view function to Proxy
-                // the value is varied based on most recent model as well
-                let newView = mostRecentViewFunction.Value (unbox model)
-                newView.UpdateIncremental(realViewPrev.Value, item)
-                realViewPrev <- ValueSome newView
+                let newView = createViewInfo programState.LastModel
+                newView.UpdateIncremental(programState.LastViewInfo, view)
+                localProgramTable.[key] <- { programState with LastViewInfo = newView }
             and internalDispatch (msg: 'InternalMessage) =
-                let oldModel = unbox<'InternalModel> model
-                model <- box (update msg oldModel)
+                let programState = localProgramTable.[key]
+                let oldModel = unbox<'InternalModel> programState.LastModel
+                localProgramTable.[key] <- { programState with LastModel = box (update msg oldModel) }
 
-                // need view here (but dont have Proxy view to get view: model -> ViewElement attribute)
-                // solution: since internalDispatch is only needed for upading parts of the view 
-                // that are dependent on the internal model, we can just use the last view function used
-                updateRealView()
+                updateView()
 
             let attribs = AttributesBuilder(1)
-            attribs.Add(ViewAttribKey, (fun stateObj -> view (unbox (stateObj)) internalDispatch))
+            attribs.Add(ViewAttribKey, (fun modelBoxed -> view (unbox (modelBoxed)) internalDispatch))
             
             let create () =
-                let modelValue = init()
-                let realView = view modelValue internalDispatch
-                model <- box modelValue
-                item <- realView.Create()
-                realViewPrev <- ValueSome realView
-                item
+                let model = init()
+                let viewInfo = view model internalDispatch
+                let targetView = viewInfo.Create()
+
+                localProgramTable.[key] <- { LastModel = box model; LastViewInfo = viewInfo }
+
+                let view boxedModel = view (unbox<'InternalModel> boxedModel) internalDispatch
+                localProgramContextTable.[key] <- { CreateViewInfo = view; View = targetView }
+                
+                targetView
 
             ViewElement.Create(create, updateProxyView, attribs)
             

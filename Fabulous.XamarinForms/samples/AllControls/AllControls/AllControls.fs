@@ -1303,33 +1303,48 @@ module App =
         match model.RootPageKind with 
         | Choice showAbout ->  
             View.ContentPage(
-                View.WithInternalModel(
-                    init = fun () -> 0
-                    , update = fun () counter -> counter + 1
-                    , view = fun counter localDispatch -> 
-                        View.StackLayout(
-                            [
-                                View.Button(
-                                    text = sprintf "Increment internal counter (%d)" counter, 
-                                    command = localDispatch)
-                                View.Button(
-                                    text = sprintf "Increment counter (%d)" model.Count, 
-                                    command = fun () -> dispatch Increment)
-                                View.Stateful(
-                                    init = (fun () -> { UpdateCount = 0 }),
-                                    contents = 
-                                        (fun state ->
-                                        state.UpdateCount <- state.UpdateCount + 1
-                                        View.Label(
-                                            text = sprintf "Stateful view called %d times because dependent on model %d" state.UpdateCount model.Count
-                                        )),
-                                    onCreate = fun initialState proxiedView -> ()
-                                )
-                            ]
+                View.StackLayout(
+                    [
+                        View.WithInternalModel(
+                            key = 0
+                            , init = fun () -> 0
+                            , update = fun () counter -> counter + 1
+                            , view = fun counter localDispatch -> 
+                                View.StackLayout(
+                                    [
+                                        View.Button(
+                                            text = sprintf "Increment internal counter (%d)" counter, 
+                                            command = localDispatch)
+                                        View.Button(
+                                            text = sprintf "Increment counter (%d)" model.Count, 
+                                            command = fun () -> dispatch Increment)
+                                        View.Stateful(
+                                            init = (fun () -> { UpdateCount = 0 }),
+                                            contents = 
+                                                (fun state ->
+                                                state.UpdateCount <- state.UpdateCount + 1
+                                                View.Label(
+                                                    text = sprintf "Stateful view called %d times because dependent on model %d" state.UpdateCount model.Count
+                                                )),
+                                            onCreate = fun initialState proxiedView -> ()
+                                        )
+                                    ]
                             
-                        )       
+                                )
+                        )
+                        View.Label("-------------")
+                        View.WithInternalModel(
+                            key = 1
+                            , init = fun () -> 0
+                            , update = fun () counter -> counter + 1
+                            , view = fun counter localDispatch ->
+                                View.Button(
+                                    sprintf "Increment another internal counter (%d)" counter
+                                    , command = localDispatch
+                                )
+                        )
+                    ]
                 )
-                
             )
             //frontPage model showAbout dispatch
         | Carousel -> carouselPageSample model dispatch
