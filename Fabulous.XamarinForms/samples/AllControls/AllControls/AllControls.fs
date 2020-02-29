@@ -1301,52 +1301,7 @@ module App =
     let view (model: Model) dispatch =
 
         match model.RootPageKind with 
-        | Choice showAbout ->  
-            View.ContentPage(
-                View.StackLayout(
-                    [
-                        View.WithInternalModel(
-                            key = 0
-                            , init = fun () -> 0
-                            , update = fun () counter -> counter + 1
-                            , view = fun counter localDispatch -> 
-                                View.StackLayout(
-                                    [
-                                        View.Button(
-                                            text = sprintf "Increment internal counter (%d)" counter, 
-                                            command = localDispatch)
-                                        View.Button(
-                                            text = sprintf "Increment counter (%d)" model.Count, 
-                                            command = fun () -> dispatch Increment)
-                                        View.Stateful(
-                                            init = (fun () -> { UpdateCount = 0 }),
-                                            contents = 
-                                                (fun state ->
-                                                state.UpdateCount <- state.UpdateCount + 1
-                                                View.Label(
-                                                    text = sprintf "Stateful view called %d times because dependent on model %d" state.UpdateCount model.Count
-                                                )),
-                                            onCreate = fun initialState proxiedView -> ()
-                                        )
-                                    ]
-                            
-                                )
-                        )
-                        View.Label("-------------")
-                        View.WithInternalModel(
-                            key = 1
-                            , init = fun () -> 0
-                            , update = fun () counter -> counter + 1
-                            , view = fun counter localDispatch ->
-                                View.Button(
-                                    sprintf "Increment another internal counter (%d)" counter
-                                    , command = localDispatch
-                                )
-                        )
-                    ]
-                )
-            )
-            //frontPage model showAbout dispatch
+        | Choice showAbout -> frontPage model showAbout dispatch
         | Carousel -> carouselPageSample model dispatch
         | Tabbed1 -> tabbedPageSamples1 model dispatch
         | Tabbed2 -> tabbedPageSamples2 model dispatch
@@ -1367,6 +1322,28 @@ module App =
         //| VideoSamples -> videoSamples model dispatch
         //| CachedImageSamples -> chachedImageSamples model dispatch
         | OxyPlotSamples -> oxyPlotSamples model dispatch
+        |> ignore
+
+        View.ContentPage(
+            View.CollectionView(
+                items = [
+                    for i in [1..30] do 
+                    View.ContentView(
+                        View.SimpleProgram(
+                            key = i,
+                            init = (fun () -> i),
+                            update = (fun () counter -> counter + 1),
+                            view = 
+                                fun counter dispatch -> 
+                                View.Button(
+                                    counter.ToString(),
+                                    command = dispatch
+                                )
+                        )
+                    )
+                ]
+            )
+        )
 
     
 type App () as app = 

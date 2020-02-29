@@ -107,7 +107,6 @@ module ViewHelpers =
         | Some viewElement -> viewElement
 
     let ContentsAttribKey = AttributeKey<(obj -> ViewElement)> "Stateful_Contents"
-    let ViewAttribKey = AttributeKey<(obj -> ViewElement)> "WithInternalModel_View"
 
     /// this is not going to work for elements that will be in a collection view that reuses xamain views
     let localStateTable = System.Runtime.CompilerServices.ConditionalWeakTable<obj, obj option>()
@@ -144,66 +143,89 @@ module ViewHelpers =
         static member OnCreate (contents : ViewElement, onCreate: (obj -> unit)) =
             View.Stateful (init = (fun () -> ()), contents = (fun _ -> contents), onCreate = (fun _ obj -> onCreate obj))
 
-    type LocalProgram =
+    open System.Collections.Generic
+
+    type internal SubProgramState =
         {
-            LastModel: obj
+            Update: obj -> obj -> obj
+            /// View function that can change depending on the main program model
+            View: obj -> ViewElement
+            /// Most recent model (separate from main program)
+            Model: obj
+            /// Last view info 
             LastViewInfo: ViewElement
+            LastTarget: obj
         }
-    let localProgramTable = System.Collections.Generic.Dictionary<int, LocalProgram>()
-    
-    type LocalProgramContext =
-        {
-            CreateViewInfo: obj -> ViewElement
-            View: obj
-        }
-    let localProgramContextTable = System.Collections.Generic.Dictionary<int, LocalProgramContext>()
+
+    let internal programTable = new Dictionary<int, SubProgramState>()
+
+    let programUpdateAttributeKey = AttributeKey<obj -> obj -> obj> "Program_Update"
+    let programViewAttributeKey = AttributeKey<obj -> ViewElement> "Program_View"
 
     type View with
-        
-        // Ideas: use ref to get the reference to the view implementation
-        static member WithInternalModel(key: int,
-                                        init: (unit -> 'InternalModel), 
-                                        update: ('InternalMessage -> 'InternalModel -> 'InternalModel), 
-                                        view : ('InternalModel -> ('InternalMessage -> unit) -> ViewElement)) =
-            let rec updateProxyView (prev: ViewElement voption) (current: ViewElement) target =
-                let newViewFunction = current.GetAttributeKeyed(ViewAttribKey)
-                match prev |> ValueOption.bind (fun prev -> prev.TryGetAttributeKeyed(ViewAttribKey)) with 
-                | ValueSome oldViewFunction 
-                    when identical oldViewFunction newViewFunction -> ()
-                | _ -> 
-                    let view boxedModel = view (unbox<'InternalModel> boxedModel) internalDispatch
-                    localProgramContextTable.[key] <- { CreateViewInfo = view; View = target }
-                    updateView()
-            and updateView () =
-                let programState = localProgramTable.[key]
-                let { CreateViewInfo = createViewInfo; View = view } = localProgramContextTable.[key]
 
-                let newView = createViewInfo programState.LastModel
-                newView.UpdateIncremental(programState.LastViewInfo, view)
-                localProgramTable.[key] <- { programState with LastViewInfo = newView }
+        // TODO: 
+        // 1. key needs to be a disposable, so when it is dealocated the program gets destroyed
+        // 2. If used as part of collection view, the init will not be called with each key, only 
+        //   N keys will be created, where N is the number of reusable views managed by ViewElementDataTemplateSelector
+        // 3. If View.Program is directly used as children a collection view, Fabulous fails view creation from type.
+        //   Probably it cant infer the target type (some XF.xxView) - possible solution: use generic parameter
+        static member SimpleProgram(key: int,
+                                    init: unit -> 'InternalModel, 
+                                    update: 'InternalMessage -> 'InternalModel -> 'InternalModel, 
+                                    view : 'InternalModel -> ('InternalMessage -> unit) -> ViewElement) =
+
+            let rec updateProxyView (_prev: ViewElement voption) (current: ViewElement) target =
+                let update' = current.GetAttributeKeyed(programUpdateAttributeKey)
+                let view' = current.GetAttributeKeyed(programViewAttributeKey)
+                
+                // Ancestor program(s) changed the view, update attribute of the proxy view.
+                programTable.[key] <- 
+                    { programTable.[key] with 
+                        Update = update'
+                        View = view'
+                        LastTarget = target 
+                    }
+                updateView()
+            and updateView () =
+                let program = programTable.[key]
+
+                let newViewInfo = program.View program.Model
+                newViewInfo.UpdateIncremental(program.LastViewInfo, program.LastTarget)
+
+                programTable.[key] <- { program with LastViewInfo = newViewInfo }
             and internalDispatch (msg: 'InternalMessage) =
-                let programState = localProgramTable.[key]
-                let oldModel = unbox<'InternalModel> programState.LastModel
-                localProgramTable.[key] <- { programState with LastModel = box (update msg oldModel) }
+                let program = programTable.[key]
+                let newModel = program.Update (box msg) program.Model
+                programTable.[key] <- { program with Model = newModel }
 
                 updateView()
 
-            let attribs = AttributesBuilder(1)
-            attribs.Add(ViewAttribKey, (fun modelBoxed -> view (unbox (modelBoxed)) internalDispatch))
+            let updateBoxedParametersAndReturn msg model = update (unbox msg) (unbox model) |> box
+            let viewBoxedParameters model = view (unbox model) internalDispatch
+
+            let attributes = AttributesBuilder(2)
+            attributes.Add(programUpdateAttributeKey, updateBoxedParametersAndReturn)
+            attributes.Add(programViewAttributeKey, viewBoxedParameters)
             
             let create () =
                 let model = init()
+
                 let viewInfo = view model internalDispatch
-                let targetView = viewInfo.Create()
+                let target = viewInfo.Create()
 
-                localProgramTable.[key] <- { LastModel = box model; LastViewInfo = viewInfo }
-
-                let view boxedModel = view (unbox<'InternalModel> boxedModel) internalDispatch
-                localProgramContextTable.[key] <- { CreateViewInfo = view; View = targetView }
+                programTable.[key] <- 
+                    {
+                        Update = updateBoxedParametersAndReturn
+                        View = viewBoxedParameters
+                        Model = box model
+                        LastViewInfo = viewInfo
+                        LastTarget = target
+                    }
                 
-                targetView
+                target
 
-            ViewElement.Create(create, updateProxyView, attribs)
+            ViewElement.Create(create, updateProxyView, attributes)
             
 
     // Keep a table to make sure we create a unique ViewElement for each external object
