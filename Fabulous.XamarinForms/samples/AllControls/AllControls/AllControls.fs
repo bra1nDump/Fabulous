@@ -1325,24 +1325,31 @@ module App =
         |> ignore
 
         View.ContentPage(
-            View.CollectionView(
-                items = [
-                    for i in [1..30] do 
-                    View.ContentView(
-                        View.SimpleProgram(
-                            key = i,
-                            init = (fun () -> i),
-                            update = (fun () counter -> counter + 1),
-                            view = 
-                                fun counter dispatch -> 
-                                View.Button(
-                                    counter.ToString(),
-                                    command = dispatch
-                                )
-                        )
+            View.StackLayout(
+                [
+                    View.Button(
+                        sprintf "Global counter %d" model.Count,
+                        command = (fun () -> dispatch Increment)
+                    )
+                    View.CollectionView(
+                        items = [
+                            for i in (if model.Count < 2 then [1..30] else [40..70]) do 
+                            View.SimpleProgram<Xamarin.Forms.Button, _, _>(
+                                key = Key(i),
+                                init = (fun () -> i),
+                                update = (fun () counter -> counter + 1),
+                                view = 
+                                    fun counter dispatch -> 
+                                    View.Button(
+                                        counter.ToString(),
+                                        command = dispatch
+                                    )
+                            )
+                        ]
                     )
                 ]
             )
+            
         )
 
     

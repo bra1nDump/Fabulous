@@ -153,14 +153,17 @@ module ViewHelpers =
             /// Most recent model (separate from main program)
             Model: obj
             /// Last view info 
-            LastViewInfo: ViewElement
+            LastViewInfo: ViewElement voption
             LastTarget: obj
         }
 
-    let internal programTable = new Dictionary<int, SubProgramState>()
-
     let programUpdateAttributeKey = AttributeKey<obj -> obj -> obj> "Program_Update"
     let programViewAttributeKey = AttributeKey<obj -> ViewElement> "Program_View"
+
+    type Key(key: int) =
+        let key = key
+
+    let internal programTable = System.Runtime.CompilerServices.ConditionalWeakTable<Key, ref<SubProgramState>>()
 
     type View with
 
@@ -170,36 +173,66 @@ module ViewHelpers =
         //   N keys will be created, where N is the number of reusable views managed by ViewElementDataTemplateSelector
         // 3. If View.Program is directly used as children a collection view, Fabulous fails view creation from type.
         //   Probably it cant infer the target type (some XF.xxView) - possible solution: use generic parameter
-        static member SimpleProgram(key: int,
-                                    init: unit -> 'InternalModel, 
-                                    update: 'InternalMessage -> 'InternalModel -> 'InternalModel, 
-                                    view : 'InternalModel -> ('InternalMessage -> unit) -> ViewElement) =
+
+        // Obervation:
+        // When used in collection view, the element is created fully based on ViewElement.TargetType, the 
+        // init function is never actually called!
+        static member SimpleProgram<'Target, 'InternalModel, 'InternalMessage>(key: Key,
+                                             init: unit -> 'InternalModel, 
+                                             update: 'InternalMessage -> 'InternalModel -> 'InternalModel, 
+                                             view : 'InternalModel -> ('InternalMessage -> unit) -> ViewElement) =
 
             let rec updateProxyView (_prev: ViewElement voption) (current: ViewElement) target =
                 let update' = current.GetAttributeKeyed(programUpdateAttributeKey)
                 let view' = current.GetAttributeKeyed(programViewAttributeKey)
                 
                 // Ancestor program(s) changed the view, update attribute of the proxy view.
-                programTable.[key] <- 
-                    { programTable.[key] with 
-                        Update = update'
-                        View = view'
-                        LastTarget = target 
-                    }
-                updateView()
-            and updateView () =
-                let program = programTable.[key]
+                match programTable.TryGetValue key with
+                | true, program ->
+                    program.Value <-
+                        { program.Value with 
+                            Update = update'
+                            View = view'
+                            LastTarget = target 
+                        }
+                | false, _ ->
+                    programTable.Add(key,
+                        {
+                            Update = update'
+                            View = view'
+                            Model = init() |> box
+                            LastViewInfo = ValueNone
+                            LastTarget = target 
+                        }
+                        |> ref
+                    )
 
+                updateView false
+            and updateView isIncremental =
+                let programRef = 
+                    match programTable.TryGetValue key with 
+                    | true, program -> program 
+                    | false, _ -> failwith "cannot run update, key is out of scope"
+
+                let program = programRef.Value
                 let newViewInfo = program.View program.Model
-                newViewInfo.UpdateIncremental(program.LastViewInfo, program.LastTarget)
+                match program.LastViewInfo with 
+                | ValueSome lastViewInfo when isIncremental ->
+                    newViewInfo.UpdateIncremental(lastViewInfo, program.LastTarget)
+                | _ ->
+                    newViewInfo.Update(program.LastTarget)
 
-                programTable.[key] <- { program with LastViewInfo = newViewInfo }
+                programRef.Value <- { program with LastViewInfo = ValueSome newViewInfo }
             and internalDispatch (msg: 'InternalMessage) =
-                let program = programTable.[key]
-                let newModel = program.Update (box msg) program.Model
-                programTable.[key] <- { program with Model = newModel }
+                let program = 
+                    match programTable.TryGetValue key with 
+                    | true, program -> program 
+                    | false, _ -> failwith "cannot dispatch a message for simple program which key has gone out of scope"
 
-                updateView()
+                let newModel = program.Value.Update (box msg) program.Value.Model
+                program.Value <- { program.Value with Model = newModel }
+
+                updateView true
 
             let updateBoxedParametersAndReturn msg model = update (unbox msg) (unbox model) |> box
             let viewBoxedParameters model = view (unbox model) internalDispatch
@@ -214,16 +247,18 @@ module ViewHelpers =
                 let viewInfo = view model internalDispatch
                 let target = viewInfo.Create()
 
-                programTable.[key] <- 
+                programTable.Add(key, 
                     {
                         Update = updateBoxedParametersAndReturn
                         View = viewBoxedParameters
                         Model = box model
-                        LastViewInfo = viewInfo
+                        LastViewInfo = ValueSome viewInfo
                         LastTarget = target
                     }
+                    |> ref
+                )
                 
-                target
+                target :?> 'Target
 
             ViewElement.Create(create, updateProxyView, attributes)
             
