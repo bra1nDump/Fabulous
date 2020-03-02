@@ -160,8 +160,8 @@ module ViewHelpers =
     let programUpdateAttributeKey = AttributeKey<obj -> obj -> obj> "Program_Update"
     let programViewAttributeKey = AttributeKey<obj -> ViewElement> "Program_View"
 
-    type Key(key: int) =
-        let key = key
+    type Key (key: int) =
+        member _.key = key
 
     let internal programTable = System.Runtime.CompilerServices.ConditionalWeakTable<Key, ref<SubProgramState>>()
 
@@ -223,7 +223,8 @@ module ViewHelpers =
                     newViewInfo.Update(program.LastTarget)
 
                 programRef.Value <- { program with LastViewInfo = ValueSome newViewInfo }
-            and internalDispatch (msg: 'InternalMessage) =
+            
+            let internalDispatch (msg: 'InternalMessage) =
                 let program = 
                     match programTable.TryGetValue key with 
                     | true, program -> program 

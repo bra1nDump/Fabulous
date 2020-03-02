@@ -1324,6 +1324,8 @@ module App =
         | OxyPlotSamples -> oxyPlotSamples model dispatch
         |> ignore
 
+        System.GC.Collect(0)
+
         View.ContentPage(
             View.StackLayout(
                 [
@@ -1333,7 +1335,7 @@ module App =
                     )
                     View.CollectionView(
                         items = [
-                            for i in (if model.Count < 2 then [1..30] else [40..70]) do 
+                            for i in [model.Count..model.Count * 2] do 
                             View.SimpleProgram<Xamarin.Forms.Button, _, _>(
                                 key = Key(i),
                                 init = (fun () -> i),
